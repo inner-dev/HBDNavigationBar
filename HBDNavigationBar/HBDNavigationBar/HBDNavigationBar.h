@@ -7,6 +7,9 @@
 //
 
 #import <UIKit/UIKit.h>
+#import "UIViewController+HBD.h"
+#import "HBDNavigationController.h"
+
 
 //! Project version number for HBDNavigationBar.
 FOUNDATION_EXPORT double HBDNavigationBarVersionNumber;
