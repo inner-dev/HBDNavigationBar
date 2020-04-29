@@ -8,7 +8,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'HBDNavigationBar'
-  s.version          = '1.5.0'
+  s.version          = '1.7.5'
   s.summary          = 'An aspiring UINavigationBar.'
 
 # This description is used to generate tags and improve search results.
@@ -28,7 +28,7 @@ TODO: Add long description of the pod here.
   s.source           = { :git => 'https://github.com/listenzz/HBDNavigationBar.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
-  s.ios.deployment_target = '8.0'
+  s.ios.deployment_target = '9.0'
 
   s.source_files = 'HBDNavigationBar/Classes/**/*'
   

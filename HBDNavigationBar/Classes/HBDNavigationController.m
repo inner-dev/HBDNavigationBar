@@ -9,7 +9,120 @@
 #import "UIViewController+HBD.h"
 #import "HBDNavigationBar.h"
 
-@interface HBDNavigationController () <UIGestureRecognizerDelegate, UINavigationControllerDelegate>
+BOOL isImageEqual(UIImage *image1, UIImage *image2) {
+    if (image1 == image2) {
+        return YES;
+    }
+    if (image1 && image2) {
+        NSData *data1 = UIImagePNGRepresentation(image1);
+        NSData *data2 = UIImagePNGRepresentation(image2);
+        BOOL result = [data1 isEqual:data2];
+        return result;
+    }
+    return NO;
+}
+
+BOOL shouldShowFake(UIViewController *vc, UIViewController *from, UIViewController *to) {
+    if (vc != to ) {
+        return NO;
+    }
+    
+    if (from.hbd_computedBarImage && to.hbd_computedBarImage && isImageEqual(from.hbd_computedBarImage, to.hbd_computedBarImage)) {
+        // have the same image
+        if (ABS(from.hbd_barAlpha - to.hbd_barAlpha) > 0.1) {
+            return YES;
+        }
+        return NO;
+    }
+    
+    if (!from.hbd_computedBarImage && !to.hbd_computedBarImage && [from.hbd_computedBarTintColor.description isEqual:to.hbd_computedBarTintColor.description]) {
+        // no images, and the colors are the same
+        if (ABS(from.hbd_barAlpha - to.hbd_barAlpha) > 0.1) {
+            return YES;
+        }
+        return NO;
+    }
+    
+    return YES;
+}
+
+BOOL colorHasAlphaComponent(UIColor *color) {
+    if (!color) {
+        return YES;
+    }
+    CGFloat red = 0;
+    CGFloat green= 0;
+    CGFloat blue = 0;
+    CGFloat alpha = 0;
+    [color getRed:&red green:&green blue:&blue alpha:&alpha];
+    return alpha < 1.0;
+}
+
+BOOL imageHasAlphaChannel(UIImage *image) {
+    CGImageAlphaInfo alpha = CGImageGetAlphaInfo(image.CGImage);
+    return (alpha == kCGImageAlphaFirst ||
+            alpha == kCGImageAlphaLast ||
+            alpha == kCGImageAlphaPremultipliedFirst ||
+            alpha == kCGImageAlphaPremultipliedLast);
+}
+
+void adjustLayout(UIViewController *vc) {
+    BOOL isTranslucent = vc.hbd_barHidden || vc.hbd_barAlpha < 1.0;
+    if (!isTranslucent) {
+        UIImage *image = vc.hbd_computedBarImage;
+        if (image) {
+            isTranslucent = imageHasAlphaChannel(image);
+        } else {
+            UIColor *color = vc.hbd_computedBarTintColor;
+            isTranslucent = colorHasAlphaComponent(color);
+        }
+    }
+    
+    if (isTranslucent || vc.extendedLayoutIncludesOpaqueBars) {
+        vc.edgesForExtendedLayout |= UIRectEdgeTop;
+    } else {
+        vc.edgesForExtendedLayout &= ~UIRectEdgeTop;
+    }
+    
+    if (vc.hbd_barHidden) {
+        if (@available(iOS 11.0, *)) {
+            UIEdgeInsets insets = vc.additionalSafeAreaInsets;
+            float height = vc.navigationController.navigationBar.bounds.size.height;
+            vc.additionalSafeAreaInsets = UIEdgeInsetsMake(-height + insets.top, insets.left, insets.bottom, insets.right);
+        }
+    }
+}
+
+UIColor* blendColor(UIColor *from, UIColor *to, float percent) {
+    CGFloat fromRed = 0;
+    CGFloat fromGreen = 0;
+    CGFloat fromBlue = 0;
+    CGFloat fromAlpha = 0;
+    [from getRed:&fromRed green:&fromGreen blue:&fromBlue alpha:&fromAlpha];
+    
+    CGFloat toRed = 0;
+    CGFloat toGreen = 0;
+    CGFloat toBlue = 0;
+    CGFloat toAlpha = 0;
+    [to getRed:&toRed green:&toGreen blue:&toBlue alpha:&toAlpha];
+    
+    CGFloat newRed =  fromRed + (toRed - fromRed) * fminf(1, percent * 4) ;
+    CGFloat newGreen = fromGreen + (toGreen - fromGreen) * fminf(1, percent * 4);
+    CGFloat newBlue = fromBlue + (toBlue - fromBlue) * fminf(1, percent * 4);
+    CGFloat newAlpha = fromAlpha + (toAlpha - fromAlpha) * fminf(1, percent * 4);
+    return [UIColor colorWithRed:newRed green:newGreen blue:newBlue alpha:newAlpha];
+}
+
+@interface HBDNavigationControllerDelegate : UIScreenEdgePanGestureRecognizer <UINavigationControllerDelegate, UIGestureRecognizerDelegate>
+
+@property (nonatomic, weak) id<UINavigationControllerDelegate> proxiedDelegate;
+@property (nonatomic, weak, readonly) HBDNavigationController *nav;
+
+- (instancetype)initWithNavigationController:(HBDNavigationController *)navigationController;
+
+@end
+
+@interface HBDNavigationController ()
 
 @property (nonatomic, readonly) HBDNavigationBar *navigationBar;
 @property (nonatomic, strong) UIVisualEffectView *fromFakeBar;
@@ -19,155 +132,210 @@
 @property (nonatomic, strong) UIImageView *fromFakeImageView;
 @property (nonatomic, strong) UIImageView *toFakeImageView;
 @property (nonatomic, weak) UIViewController *poppingViewController;
+@property (nonatomic, assign) BOOL transitional;
+@property (nonatomic, strong) HBDNavigationControllerDelegate *navigationDelegate;
+
+- (void)updateNavigationBarAlphaForViewController:(UIViewController *)vc;
+- (void)updateNavigationBarColorOrImageForViewController:(UIViewController *)vc;
+- (void)updateNavigationBarShadowImageIAlphaForViewController:(UIViewController *)vc;
+- (void)updateNavigationBarAnimatedForViewController:(UIViewController *)vc;
+
+- (void)showFakeBarFrom:(UIViewController *)from to:(UIViewController *)to;
+
+- (void)clearFake;
+
+- (void)resetSubviewsInNavBar:(UINavigationBar *)navBar;
+
+- (UIGestureRecognizer *)superInteractivePopGestureRecognizer;
 
 @end
 
-@implementation HBDNavigationController
+@implementation HBDNavigationControllerDelegate
 
-@dynamic navigationBar;
-
-- (instancetype)initWithRootViewController:(UIViewController *)rootViewController {
-    if (self = [super initWithNavigationBarClass:[HBDNavigationBar class] toolbarClass:nil]) {
-        self.viewControllers = @[ rootViewController ];
+- (instancetype)initWithNavigationController:(HBDNavigationController *)nav {
+    if (self = [super init]) {
+        _nav = nav;
+        self.edges = UIRectEdgeLeft;
+        self.delegate = self;
+        [self addTarget:self action:@selector(handleNavigationTransition:)];
+        [nav.view addGestureRecognizer:self];
+        [nav superInteractivePopGestureRecognizer].enabled = NO;
     }
     return self;
 }
 
-- (instancetype)initWithNavigationBarClass:(Class)navigationBarClass toolbarClass:(Class)toolbarClass {
-    NSAssert([navigationBarClass isSubclassOfClass:[HBDNavigationBar class]], @"navigationBarClass Must be a subclass of HBDNavigationBar");
-    return [super initWithNavigationBarClass:navigationBarClass toolbarClass:toolbarClass];
-}
-
-- (instancetype)init {
-    return [super initWithNavigationBarClass:[HBDNavigationBar class] toolbarClass:nil];
-}
-
-- (UIViewController *)childViewControllerForStatusBarHidden {
-    return self.topViewController;
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.interactivePopGestureRecognizer.delegate = self;
-    [self.interactivePopGestureRecognizer addTarget:self action:@selector(handlePopGesture:)];
-    self.delegate = self;
-    [self.navigationBar setTranslucent:YES];
-    [self.navigationBar setShadowImage:[UINavigationBar appearance].shadowImage];
-}
-
-- (void)viewWillLayoutSubviews {
-    [super viewWillLayoutSubviews];
-    // 修复一个神奇的 BUG https://github.com/listenzz/HBDNavigationBar/issues/29
-    self.topViewController.view.frame = self.topViewController.view.frame;
-    
-    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
-    if (coordinator) {
-        // 解决 ios 11 手势反弹的问题
-        UIViewController *from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
-        if (from == self.poppingViewController) {
-            [self updateNavigationBarForViewController:from];
-        }
-    } else {
-        // 再修复一个神奇的 BUG: https://github.com/listenzz/HBDNavigationBar/issues/31
-        [self updateNavigationBarForViewController:self.topViewController];
-    }
-}
-
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
-    if (self.viewControllers.count > 1) {
-        return self.topViewController.hbd_backInteractive && self.topViewController.hbd_swipeBackEnabled;
+    if (self.nav.viewControllers.count > 1) {
+        return self.nav.topViewController.hbd_backInteractive && self.nav.topViewController.hbd_swipeBackEnabled;
     }
     return NO;
 }
 
-
-- (BOOL)navigationBar:(UINavigationBar *)navigationBar shouldPopItem:(UINavigationItem *)item {
-    if (self.viewControllers.count > 1 && self.topViewController.navigationItem == item ) {
-        if (!(self.topViewController.hbd_backInteractive && self.topViewController.hbd_clickBackEnabled)) {
-            [self resetSubviewsInNavBar:self.navigationBar];
-            return NO;
+- (void)handleNavigationTransition:(UIScreenEdgePanGestureRecognizer *)pan {
+    HBDNavigationController *nav = self.nav;
+    if (![self.proxiedDelegate respondsToSelector:@selector(navigationController:interactionControllerForAnimationController:)]) {
+        id<HBDNavigationTransitionProtocol> target = (id<HBDNavigationTransitionProtocol>)[nav superInteractivePopGestureRecognizer].delegate;
+        if ([target respondsToSelector:@selector(handleNavigationTransition:)]) {
+            [target handleNavigationTransition:pan];
         }
     }
-    return [super navigationBar:navigationBar shouldPopItem:item];
+    
+    if (@available(iOS 11.0, *)) {
+        // empty
+    } else {
+        id<UIViewControllerTransitionCoordinator> coordinator = nav.transitionCoordinator;
+        if (coordinator) {
+            UIViewController *from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
+            UIViewController *to = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
+            if (pan.state == UIGestureRecognizerStateBegan || pan.state == UIGestureRecognizerStateChanged) {
+                nav.navigationBar.tintColor = blendColor(from.hbd_tintColor, to.hbd_tintColor, coordinator.percentComplete);
+            }
+        }
+    }
 }
 
-
 - (void)navigationController:(UINavigationController *)navigationController willShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
-    self.navigationBar.titleTextAttributes = viewController.hbd_titleTextAttributes;
-    self.navigationBar.barStyle = viewController.hbd_barStyle;
+    if (self.proxiedDelegate && [self.proxiedDelegate respondsToSelector:@selector(navigationController:willShowViewController:animated:)]) {
+        [self.proxiedDelegate navigationController:navigationController willShowViewController:viewController animated:animated];
+    }
+    HBDNavigationController *nav = self.nav;
+    nav.transitional = YES;
     
-    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+    if (!viewController.hbd_extendedLayoutDidSet) {
+        adjustLayout(viewController);
+        viewController.hbd_extendedLayoutDidSet = YES;
+    }
+    
+    id<UIViewControllerTransitionCoordinator> coordinator = nav.transitionCoordinator;
     if (coordinator) {
+        if (@available(iOS 11.0, *)) {
+            UIViewController *fromVC = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
+            UIViewController *toVC = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
+            
+            if (fromVC == nav.poppingViewController && toVC.navigationController == nav) {
+                UIBarButtonItem *oldButtonItem = toVC.navigationItem.backBarButtonItem;
+                UIBarButtonItem *newButtonItem = [[UIBarButtonItem alloc] init];
+                if (oldButtonItem) {
+                    newButtonItem.title = oldButtonItem.title;
+                } else {
+                    newButtonItem.title = nav.navigationBar.backButtonLabel.text;
+                }
+                newButtonItem.tintColor = fromVC.hbd_tintColor;
+                toVC.navigationItem.backBarButtonItem = newButtonItem;
+            }
+            
+            UIViewController *top = nav.topViewController;
+            if (top.navigationItem.backBarButtonItem && !nav.poppingViewController) {
+                top.hbd_backBarButtonItem = top.navigationItem.backBarButtonItem;
+            }
+            
+            if (toVC == top && fromVC.navigationController == nav) {
+                UIBarButtonItem *backItem = fromVC.navigationItem.backBarButtonItem;
+                if (backItem) {
+                    backItem.tintColor = toVC.hbd_tintColor;
+                }
+            }
+        }
         [self showViewController:viewController withCoordinator:coordinator];
     } else {
-        if (!animated && self.childViewControllers.count > 1) {
-            UIViewController *lastButOne = self.childViewControllers[self.childViewControllers.count - 2];
+        if (!animated && nav.childViewControllers.count > 1) {
+            UIViewController *lastButOne = nav.childViewControllers[nav.childViewControllers.count - 2];
             if (shouldShowFake(viewController, lastButOne, viewController)) {
-                [self showFakeBarFrom:lastButOne to:viewController];
+                [nav showFakeBarFrom:lastButOne to:viewController];
                 return;
             }
         }
-        [self updateNavigationBarForViewController:viewController];
+        [nav updateNavigationBarForViewController:viewController];
     }
 }
 
 - (void)navigationController:(UINavigationController *)navigationController didShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
-    if (!animated) {
-        [self updateNavigationBarForViewController:viewController];
-        [self clearFake];
+    if (self.proxiedDelegate && [self.proxiedDelegate respondsToSelector:@selector(navigationController:didShowViewController:animated:)]) {
+        [self.proxiedDelegate navigationController:navigationController didShowViewController:viewController animated:animated];
     }
-    self.poppingViewController = nil;
+    HBDNavigationController *nav = self.nav;
+    nav.transitional = NO;
+    if (!animated) {
+       [nav updateNavigationBarForViewController:viewController];
+       [nav clearFake];
+    }
+    
+    if (@available(iOS 11.0, *)) {
+        if (viewController.hbd_backBarButtonItem) {
+            viewController.navigationItem.backBarButtonItem = viewController.hbd_backBarButtonItem;
+        }
+    }
+    nav.poppingViewController = nil;
 }
 
-
-- (UIViewController *)popViewControllerAnimated:(BOOL)animated {
-    self.poppingViewController = self.topViewController;
-    UIViewController *vc = [super popViewControllerAnimated:animated];
-    // vc != self.topViewController
-    // 修复：ios 11 以上，当前后两个页面的 barStyle 不一样时，点击返回按钮返回，前一个页面的标题颜色响应迟缓或不响应
-    self.navigationBar.barStyle = self.topViewController.hbd_barStyle;
-    self.navigationBar.titleTextAttributes = self.topViewController.hbd_titleTextAttributes;
-    return vc;
+- (UIInterfaceOrientationMask)navigationControllerSupportedInterfaceOrientations:(UINavigationController *)navigationController {
+    if (self.proxiedDelegate && [self.proxiedDelegate respondsToSelector:@selector(navigationControllerSupportedInterfaceOrientations:)]) {
+        return [self.proxiedDelegate navigationControllerSupportedInterfaceOrientations:navigationController];
+    }
+    return UIInterfaceOrientationMaskPortrait;
 }
 
-- (NSArray<UIViewController *> *)popToViewController:(UIViewController *)viewController animated:(BOOL)animated {
-    self.poppingViewController = self.topViewController;
-    NSArray *array = [super popToViewController:viewController animated:animated];
-    self.navigationBar.barStyle = self.topViewController.hbd_barStyle;
-    self.navigationBar.titleTextAttributes = self.topViewController.hbd_titleTextAttributes;
-    return array;
+- (UIInterfaceOrientation)navigationControllerPreferredInterfaceOrientationForPresentation:(UINavigationController *)navigationController  {
+    if (self.proxiedDelegate && [self.proxiedDelegate respondsToSelector:@selector(navigationControllerPreferredInterfaceOrientationForPresentation:)]) {
+        return [self.proxiedDelegate navigationControllerPreferredInterfaceOrientationForPresentation:navigationController];
+    }
+    return UIInterfaceOrientationPortrait;
 }
 
-- (NSArray<UIViewController *> *)popToRootViewControllerAnimated:(BOOL)animated {
-    self.poppingViewController = self.topViewController;
-    NSArray *array = [super popToRootViewControllerAnimated:animated];
-    self.navigationBar.barStyle = self.topViewController.hbd_barStyle;
-    self.navigationBar.titleTextAttributes = self.topViewController.hbd_titleTextAttributes;
-    return array;
+- (nullable id <UIViewControllerInteractiveTransitioning>)navigationController:(UINavigationController *)navigationController
+                                   interactionControllerForAnimationController:(id <UIViewControllerAnimatedTransitioning>) animationController  {
+    if (self.proxiedDelegate && [self.proxiedDelegate respondsToSelector:@selector(navigationController:interactionControllerForAnimationController:)]) {
+        return [self.proxiedDelegate navigationController:navigationController interactionControllerForAnimationController:animationController];
+    }
+    return nil;
 }
 
+- (nullable id <UIViewControllerAnimatedTransitioning>)navigationController:(UINavigationController *)navigationController
+                                   animationControllerForOperation:(UINavigationControllerOperation)operation
+                                                fromViewController:(UIViewController *)fromVC
+                                                           toViewController:(UIViewController *)toVC  {
+    if (self.proxiedDelegate && [self.proxiedDelegate respondsToSelector:@selector(navigationController:animationControllerForOperation:fromViewController:toViewController:)]) {
+        return [self.proxiedDelegate navigationController:navigationController animationControllerForOperation:operation fromViewController:fromVC toViewController:toVC];
+    }
+    return nil;
+}
 
-- (void)handlePopGesture:(UIScreenEdgePanGestureRecognizer *)recognizer {
-    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+- (void)showViewController:(UIViewController * _Nonnull)viewController withCoordinator: (id<UIViewControllerTransitionCoordinator>)coordinator {
     UIViewController *from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
     UIViewController *to = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
-    if (recognizer.state == UIGestureRecognizerStateBegan || recognizer.state == UIGestureRecognizerStateChanged) {
-        self.navigationBar.tintColor = blendColor(from.hbd_tintColor, to.hbd_tintColor, coordinator.percentComplete);
+    // Fix a system bug https://github.com/listenzz/HBDNavigationBar/issues/35
+    if (@available(iOS 12.0, *)) {
+        [self resetButtonLabelInNavBar:self.nav.navigationBar];
     }
-}
+    
+    [self.nav updateNavigationBarAnimatedForViewController:viewController];
 
-- (void)resetSubviewsInNavBar:(UINavigationBar *)navBar {
-    if (@available(iOS 11, *)) {
-    } else {
-        // Workaround for >= iOS7.1. Thanks to @boliva - http://stackoverflow.com/posts/comments/34452906
-        [navBar.subviews enumerateObjectsUsingBlock:^(__kindof UIView * _Nonnull subview, NSUInteger idx, BOOL * _Nonnull stop) {
-            if (subview.alpha < 1.0) {
-                [UIView animateWithDuration:.25 animations:^{
-                    subview.alpha = 1.0;
-                }];
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+        BOOL shouldFake = shouldShowFake(viewController, from, to);
+        if (shouldFake) {
+            // title attributes, button tint colo, barStyle
+            [self.nav updateNavigationBarAnimatedForViewController:viewController];
+            
+            // background alpha, background color, shadow image alpha
+            [self.nav showFakeBarFrom:from to:to];
+        } else {
+            [self.nav updateNavigationBarForViewController:viewController];
+        }
+    } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+        self.nav.transitional = NO;
+        self.nav.poppingViewController = nil;
+        if (context.isCancelled) {
+            if (to == viewController) {
+                [self.nav updateNavigationBarForViewController:from];
             }
-        }];
-    }
+        } else {
+            // `to` != `viewController` when present
+            [self.nav updateNavigationBarForViewController:viewController];
+        }
+        if (to == viewController) {
+            [self.nav clearFake];
+        }
+    }];
 }
 
 - (void)resetButtonLabelInNavBar:(UINavigationBar *)navBar {
@@ -193,6 +361,127 @@
     }
 }
 
+@end
+
+@implementation HBDNavigationController
+
+@dynamic navigationBar;
+
+- (instancetype)initWithRootViewController:(UIViewController *)rootViewController {
+    if (self = [super initWithNavigationBarClass:[HBDNavigationBar class] toolbarClass:nil]) {
+        self.viewControllers = @[ rootViewController ];
+    }
+    return self;
+}
+
+- (instancetype)initWithNavigationBarClass:(Class)navigationBarClass toolbarClass:(Class)toolbarClass {
+    NSAssert([navigationBarClass isSubclassOfClass:[HBDNavigationBar class]], @"navigationBarClass Must be a subclass of HBDNavigationBar");
+    return [super initWithNavigationBarClass:navigationBarClass toolbarClass:toolbarClass];
+}
+
+- (instancetype)init {
+    return [super initWithNavigationBarClass:[HBDNavigationBar class] toolbarClass:nil];
+}
+
+- (void)setDelegate:(id<UINavigationControllerDelegate>)delegate {
+    if ([delegate isKindOfClass:[HBDNavigationControllerDelegate class]] || !self.navigationDelegate) {
+        [super setDelegate:delegate];
+    } else {
+        self.navigationDelegate.proxiedDelegate = delegate;
+    }
+}
+
+- (UIGestureRecognizer *)interactivePopGestureRecognizer {
+    return self.navigationDelegate;
+}
+
+- (UIGestureRecognizer *)superInteractivePopGestureRecognizer {
+    return [super interactivePopGestureRecognizer];
+}
+
+- (UIViewController *)childViewControllerForStatusBarHidden {
+    return self.topViewController;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    [self.navigationBar setTranslucent:YES];
+    [self.navigationBar setShadowImage:[UINavigationBar appearance].shadowImage];
+    
+    self.navigationDelegate = [[HBDNavigationControllerDelegate alloc] initWithNavigationController:self];
+    self.navigationDelegate.proxiedDelegate = self.delegate;
+    self.delegate = self.navigationDelegate;
+}
+
+- (void)viewWillLayoutSubviews {
+    [super viewWillLayoutSubviews];
+    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+    if (!coordinator) {
+       [self updateNavigationBarForViewController:self.topViewController];
+    }
+}
+
+- (BOOL)navigationBar:(UINavigationBar *)navigationBar shouldPopItem:(UINavigationItem *)item {
+    if (self.viewControllers.count > 1 && self.topViewController.navigationItem == item ) {
+        if (!(self.topViewController.hbd_backInteractive && self.topViewController.hbd_clickBackEnabled)) {
+            [self resetSubviewsInNavBar:self.navigationBar];
+            return NO;
+        }
+    }
+    return [super navigationBar:navigationBar shouldPopItem:item];
+}
+
+- (UIViewController *)popViewControllerAnimated:(BOOL)animated {
+    self.poppingViewController = self.topViewController;
+    UIViewController *vc = [super popViewControllerAnimated:animated];
+    // vc != self.topViewController
+    [self fixClickBackIssue];
+    return vc;
+}
+
+- (NSArray<UIViewController *> *)popToViewController:(UIViewController *)viewController animated:(BOOL)animated {
+    self.poppingViewController = self.topViewController;
+    NSArray *array = [super popToViewController:viewController animated:animated];
+    [self fixClickBackIssue];
+    return array;
+}
+
+- (NSArray<UIViewController *> *)popToRootViewControllerAnimated:(BOOL)animated {
+    self.poppingViewController = self.topViewController;
+    NSArray *array = [super popToRootViewControllerAnimated:animated];
+    [self fixClickBackIssue];
+    return array;
+}
+
+- (void)fixClickBackIssue {
+    if (@available(iOS 13.0, *)) {
+        return;
+    }
+    if (@available(iOS 11.0, *)){
+        // fix：ios 11，12，当前后两个页面的 barStyle 不一样时，点击返回按钮返回，前一个页面的标题颜色响应迟缓或不响应
+        id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+        if (!(coordinator && coordinator.interactive)) {
+            self.navigationBar.barStyle = self.topViewController.hbd_barStyle;
+            self.navigationBar.titleTextAttributes = self.topViewController.hbd_titleTextAttributes;
+        }
+    }
+}
+
+- (void)resetSubviewsInNavBar:(UINavigationBar *)navBar {
+    if (@available(iOS 11, *)) {
+        // empty
+    } else {
+        // Workaround for >= iOS7.1. Thanks to @boliva - http://stackoverflow.com/posts/comments/34452906
+        [navBar.subviews enumerateObjectsUsingBlock:^(__kindof UIView * _Nonnull subview, NSUInteger idx, BOOL * _Nonnull stop) {
+            if (subview.alpha < 1.0) {
+                [UIView animateWithDuration:.25 animations:^{
+                    subview.alpha = 1.0;
+                }];
+            }
+        }];
+    }
+}
+
 - (void)printSubViews:(UIView *)view prefix:(NSString *)prefix {
     NSString *viewName = [[[view classForCoder] description] stringByReplacingOccurrencesOfString:@"_" withString:@""];
     NSLog(@"%@%@", prefix, viewName);
@@ -211,11 +500,39 @@
 }
 
 - (void)updateNavigationBarAnimatedForViewController:(UIViewController *)vc {
-    [UIView setAnimationsEnabled:NO];
+    self.navigationBar.tintColor = vc.hbd_tintColor;
     self.navigationBar.barStyle = vc.hbd_barStyle;
     self.navigationBar.titleTextAttributes = vc.hbd_titleTextAttributes;
-    self.navigationBar.tintColor = vc.hbd_tintColor;
-    [UIView setAnimationsEnabled:YES];
+    
+    if (@available(iOS 11.0, *)) {
+        if (!self.poppingViewController) {
+            __block NSInteger index = -1;
+            if (!self.transitional) {
+                [self.childViewControllers enumerateObjectsWithOptions:NSEnumerationReverse usingBlock:^(__kindof UIViewController * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+                    if (obj == vc) {
+                        index = idx - 1;
+                        *stop = YES;
+                    }
+                }];
+            }
+            
+            if (index > -1) {
+                UIViewController *backItemVC = self.childViewControllers[index];
+                UIBarButtonItem *backItem = backItemVC.navigationItem.backBarButtonItem;
+                if (backItem) {
+                    backItem = [[UIBarButtonItem alloc] init];
+                    UIBarButtonItem *storedBackItem = backItemVC.hbd_backBarButtonItem;
+                    if (storedBackItem) {
+                        backItem.title = storedBackItem.title;
+                    } else {
+                        backItem.title = self.navigationBar.backButtonLabel.text;
+                    }
+                    backItem.tintColor = vc.hbd_tintColor;
+                    backItemVC.navigationItem.backBarButtonItem = backItem;
+                }
+            }
+        }
+    }
 }
 
 - (void)updateNavigationBarAlphaForViewController:(UIViewController *)vc {
@@ -228,7 +545,6 @@
     }
     self.navigationBar.shadowImageView.alpha = vc.hbd_computedBarShadowAlpha;
 }
-
 - (void)updateNavigationBarColorOrImageForViewController:(UIViewController *)vc {
     self.navigationBar.barTintColor = vc.hbd_computedBarTintColor;
     self.navigationBar.backgroundImageView.image = vc.hbd_computedBarImage;
@@ -236,76 +552,6 @@
 
 - (void)updateNavigationBarShadowImageIAlphaForViewController:(UIViewController *)vc {
     self.navigationBar.shadowImageView.alpha = vc.hbd_computedBarShadowAlpha;
-}
-
-- (void)showViewController:(UIViewController * _Nonnull)viewController withCoordinator: (id<UIViewControllerTransitionCoordinator>)coordinator{
-    UIViewController *from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
-    UIViewController *to = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
-    
-    // 修复一个系统 BUG https://github.com/listenzz/HBDNavigationBar/issues/35
-    [self resetButtonLabelInNavBar:self.navigationBar];
-    
-    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
-        BOOL shouldFake = shouldShowFake(viewController, from, to);
-        if (shouldFake) {
-            [self showViewControllerAlongsideTransition:viewController from:from to:to interactive:context.interactive];
-        } else {
-            [self showViewControllerAlongsideTransition:viewController interactive:context.interactive];
-        }
-    } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
-        if (context.isCancelled) {
-            [self updateNavigationBarForViewController:from];
-        } else {
-            // 当 present 时 to 不等于 viewController
-            [self updateNavigationBarForViewController:viewController];
-        }
-        if (to == viewController) {
-            [self clearFake];
-        }
-    }];
-    
-    if (coordinator.interactive) {
-        if (@available(iOS 10.0, *)) {
-            [coordinator notifyWhenInteractionChangesUsingBlock:^(id<UIViewControllerTransitionCoordinatorContext>  _Nonnull context) {
-                if (context.isCancelled) {
-                    [self updateNavigationBarAnimatedForViewController:from];
-                } else {
-                    [self updateNavigationBarAnimatedForViewController:viewController];
-                }
-            }];
-        } else {
-            [coordinator notifyWhenInteractionEndsUsingBlock:^(id<UIViewControllerTransitionCoordinatorContext>  _Nonnull context) {
-                if (context.isCancelled) {
-                    [self updateNavigationBarAnimatedForViewController:from];
-                } else {
-                    [self updateNavigationBarAnimatedForViewController:viewController];
-                }
-            }];
-        }
-    }
-}
-
-- (void)showViewControllerAlongsideTransition:(UIViewController * _Nonnull)viewController interactive:(BOOL)interactive {
-    self.navigationBar.titleTextAttributes = viewController.hbd_titleTextAttributes;
-    self.navigationBar.barStyle = viewController.hbd_barStyle;
-    if (!interactive) {
-        self.navigationBar.tintColor = viewController.hbd_tintColor;
-    }
-    
-    [self updateNavigationBarAlphaForViewController:viewController];
-    [self updateNavigationBarColorOrImageForViewController:viewController];
-    [self updateNavigationBarShadowImageIAlphaForViewController:viewController];
-}
-
-- (void)showViewControllerAlongsideTransition:(UIViewController *)viewController from:(UIViewController *)from to:(UIViewController * _Nonnull)to interactive:(BOOL)interactive {
-    // 标题样式，按钮颜色，barStyle
-    self.navigationBar.titleTextAttributes = viewController.hbd_titleTextAttributes;
-    self.navigationBar.barStyle = viewController.hbd_barStyle;
-    if (!interactive) {
-        self.navigationBar.tintColor = viewController.hbd_tintColor;
-    }
-    // 背景透明度，背景颜色，阴影透明度
-    [self showFakeBarFrom:from to:to];
 }
 
 - (void)showFakeBarFrom:(UIViewController *)from to:(UIViewController * _Nonnull)to {
@@ -415,15 +661,17 @@
 - (CGRect)fakeBarFrameForViewController:(UIViewController *)vc {
     UIView *back = self.navigationBar.subviews[0];
     CGRect frame = [self.navigationBar convertRect:back.frame toView:vc.view];
-    frame.origin.x = vc.view.frame.origin.x;
-    //  解决根视图为scrollView的时候，Push不正常
+    frame.origin.x = 0;
+    if ((vc.edgesForExtendedLayout & UIRectEdgeTop) == 0) {
+        frame.origin.y = -frame.size.height;
+    }
+
+    // fix issue for pushed to UIViewController whose root view is UIScrollView.
     if ([vc.view isKindOfClass:[UIScrollView class]]) {
         UIScrollView *scrollview = (UIScrollView *)vc.view;
-        //  适配iPhoneX iPhoneXR
-        NSArray *xrs =@[ @812, @896 ];
-        BOOL isIPhoneX = [xrs containsObject:@([UIScreen mainScreen].bounds.size.height)];
+        scrollview.clipsToBounds = NO;
         if (scrollview.contentOffset.y == 0) {
-            frame.origin.y = -(isIPhoneX ? 88 : 64);
+            frame.origin.y = -frame.size.height;
         }
     }
     return frame;
@@ -431,63 +679,6 @@
 
 - (CGRect)fakeShadowFrameWithBarFrame:(CGRect)frame {
     return CGRectMake(frame.origin.x, frame.size.height + frame.origin.y - 0.5, frame.size.width, 0.5);
-}
-
-BOOL shouldShowFake(UIViewController *vc,UIViewController *from, UIViewController *to) {
-    if (vc != to ) {
-        return NO;
-    }
-    
-    if (from.hbd_computedBarImage && to.hbd_computedBarImage && isImageEqual(from.hbd_computedBarImage, to.hbd_computedBarImage)) {
-        // 都有图片，并且是同一张图片
-        if (ABS(from.hbd_barAlpha - to.hbd_barAlpha) > 0.1) {
-            return YES;
-        }
-        return NO;
-    }
-    
-    if (!from.hbd_computedBarImage && !to.hbd_computedBarImage && [from.hbd_computedBarTintColor.description isEqual:to.hbd_computedBarTintColor.description]) {
-        // 都没图片，并且颜色相同
-        if (ABS(from.hbd_barAlpha - to.hbd_barAlpha) > 0.1) {
-            return YES;
-        }
-        return NO;
-    }
-    
-    return YES;
-}
-
-BOOL isImageEqual(UIImage *image1, UIImage *image2) {
-    if (image1 == image2) {
-        return YES;
-    }
-    if (image1 && image2) {
-        NSData *data1 = UIImagePNGRepresentation(image1);
-        NSData *data2 = UIImagePNGRepresentation(image2);
-        BOOL result = [data1 isEqual:data2];
-        return result;
-    }
-    return NO;
-}
-
-UIColor* blendColor(UIColor *from, UIColor *to, float percent) {
-    CGFloat fromRed = 0;
-    CGFloat fromGreen = 0;
-    CGFloat fromBlue = 0;
-    CGFloat fromAlpha = 0;
-    [from getRed:&fromRed green:&fromGreen blue:&fromBlue alpha:&fromAlpha];
-    
-    CGFloat toRed = 0;
-    CGFloat toGreen = 0;
-    CGFloat toBlue = 0;
-    CGFloat toAlpha = 0;
-    [to getRed:&toRed green:&toGreen blue:&toBlue alpha:&toAlpha];
-    
-    CGFloat newRed =  fromRed + (toRed - fromRed) * fminf(1, percent * 4) ;
-    CGFloat newGreen = fromGreen + (toGreen - fromGreen) * fminf(1, percent * 4);
-    CGFloat newBlue = fromBlue + (toBlue - fromBlue) * fminf(1, percent * 4);
-    CGFloat newAlpha = fromAlpha + (toAlpha - fromAlpha) * fminf(1, percent * 4);
-    return [UIColor colorWithRed:newRed green:newGreen blue:newBlue alpha:newAlpha];
 }
 
 @end
