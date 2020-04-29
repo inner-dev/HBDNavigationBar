@@ -8,9 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		B24890C62459845100546AA3 /* UIViewController+HBD.m in Sources */ = {isa = PBXBuildFile; fileRef = B24890C02459845100546AA3 /* UIViewController+HBD.m */; };
-		B24890C72459845100546AA3 /* HBDNavigationController.h in Headers */ = {isa = PBXBuildFile; fileRef = B24890C12459845100546AA3 /* HBDNavigationController.h */; };
-		B24890C82459845100546AA3 /* HBDNavigationBar.h in Headers */ = {isa = PBXBuildFile; fileRef = B24890C22459845100546AA3 /* HBDNavigationBar.h */; };
-		B24890C92459845100546AA3 /* UIViewController+HBD.h in Headers */ = {isa = PBXBuildFile; fileRef = B24890C32459845100546AA3 /* UIViewController+HBD.h */; };
+		B24890C72459845100546AA3 /* HBDNavigationController.h in Headers */ = {isa = PBXBuildFile; fileRef = B24890C12459845100546AA3 /* HBDNavigationController.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		B24890C82459845100546AA3 /* HBDNavigationBar.h in Headers */ = {isa = PBXBuildFile; fileRef = B24890C22459845100546AA3 /* HBDNavigationBar.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		B24890C92459845100546AA3 /* UIViewController+HBD.h in Headers */ = {isa = PBXBuildFile; fileRef = B24890C32459845100546AA3 /* UIViewController+HBD.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		B24890CA2459845100546AA3 /* HBDNavigationBar.m in Sources */ = {isa = PBXBuildFile; fileRef = B24890C42459845100546AA3 /* HBDNavigationBar.m */; };
 		B24890CB2459845100546AA3 /* HBDNavigationController.m in Sources */ = {isa = PBXBuildFile; fileRef = B24890C52459845100546AA3 /* HBDNavigationController.m */; };
 /* End PBXBuildFile section */
@@ -74,9 +74,9 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B24890C72459845100546AA3 /* HBDNavigationController.h in Headers */,
-				B24890C92459845100546AA3 /* UIViewController+HBD.h in Headers */,
 				B24890C82459845100546AA3 /* HBDNavigationBar.h in Headers */,
+				B24890C92459845100546AA3 /* UIViewController+HBD.h in Headers */,
+				B24890C72459845100546AA3 /* HBDNavigationController.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
